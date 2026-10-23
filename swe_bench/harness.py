@@ -57,7 +57,10 @@ def process_entry(entry, out_dname, model_name_or_path, model_patch_paths):
         tmp_currdir = os.path.abspath(os.getcwd())
         logger.info(f"Current directory: {tmp_currdir}")
         # If not in dgm directory, try to change to it
-        if not tmp_currdir.endswith('/dgm'):
+        # dgm-config: bounded — stop once the agent files are present, at '/', or
+        # after a few hops (os.chdir('..') at '/' never moves).
+        _has_agent_files = os.path.exists('coding_agent.py')
+        if not tmp_currdir.endswith('/dgm') and not _has_agent_files:
             try:
                 os.chdir('dgm')
                 tmp_currdir = os.path.abspath(os.getcwd())
@@ -65,8 +68,15 @@ def process_entry(entry, out_dname, model_name_or_path, model_patch_paths):
             except Exception as e:
                 pass
         # If still not in dgm directory, go up until we find it
-        while not tmp_currdir.endswith('/dgm'):
+        _hops = 0  # dgm-config: bounded climb
+        while (
+            not tmp_currdir.endswith('/dgm')
+            and not os.path.exists('coding_agent.py')
+            and tmp_currdir != '/'
+            and _hops < 8
+        ):
             os.chdir('..')
+            _hops += 1
             tmp_currdir = os.path.abspath(os.getcwd())
             logger.info(f"Changed directory to: {tmp_currdir}")
 
@@ -80,6 +90,8 @@ def process_entry(entry, out_dname, model_name_or_path, model_patch_paths):
         copy_to_container(container, 'prompts/', '/dgm/prompts/')
         copy_to_container(container, 'llm.py', '/dgm/llm.py')
         copy_to_container(container, 'llm_withtools.py', '/dgm/llm_withtools.py')
+        copy_to_container(container, 'dgm_config.py', '/dgm/dgm_config.py')  # dgm-config
+        copy_to_container(container, 'models.json', '/dgm/models.json')  # dgm-config
         chat_history_file_container = f'/dgm/{chat_history_file.name}'
 
         # Install issue requirements
@@ -107,7 +119,19 @@ def process_entry(entry, out_dname, model_name_or_path, model_patch_paths):
 
         # Install this repo requirements
         safe_log("Installing more requirements")
-        exec_result = container.exec_run("python -m pip install -r /dgm/requirements.txt", workdir='/')
+        _proxy_env = {  # dgm-config: proxy for pip in the eval container
+            k: os.environ[k]
+            for k in (
+                "http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY",
+                "HTTPS_PROXY", "NO_PROXY",
+            )
+            if os.environ.get(k)
+        }
+        exec_result = container.exec_run(
+            "python -m pip install -r /dgm/requirements.txt",
+            workdir='/',
+            environment=_proxy_env,
+        )
         log_container_output(exec_result)
 
         # Run the agent
@@ -261,7 +285,7 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_samples", type=int, default=-1, help="Number of samples to process")
-    parser.add_argument("--max_workers", type=int, default=4, help="Maximum number of concurrent threads")
+    parser.add_argument("--max_workers", type=int, default=2, help="Maximum number of concurrent threads")
     parser.add_argument("--model_name_or_path", type=str, default=None, help="Model name or path")
     parser.add_argument("--model_patch_paths", type=str, default=None, help="Paths to the model patches")
     parser.add_argument("--num_evals", type=int, default=1, help="Repeated number of swe evaluations")

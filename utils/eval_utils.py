@@ -31,7 +31,9 @@ def msg_history_to_report(instance_id, msg_history, model=None):
         # Check if the message is from the user
         if msg['role'] == 'user':
             # Check if the message contains the tool result
-            content = msg['content'][0]['text']
+            content = msg['content']
+            if isinstance(content, list):
+                content = content[0]['text'] if content else ''
             if 'Tool Result:' in content:
                 report = parse_eval_output(instance_id, content)
                 # Only return the report if it is not empty

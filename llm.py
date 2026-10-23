@@ -7,6 +7,9 @@ import anthropic
 import backoff
 import openai
 
+from dgm_config import api_key as _api_key  # dgm-config
+from dgm_config import model_entry as _model_entry  # dgm-config
+
 MAX_OUTPUT_TOKENS = 4096
 AVAILABLE_LLMS = [
     # Anthropic models
@@ -49,6 +52,18 @@ def create_client(model: str):
     Returns:
         Tuple[Any, str]: A tuple containing the client instance and the client model name.
     """
+    _entry = _model_entry(model)  # dgm-config
+    if _entry is not None:
+        _provider = _entry.get("provider", "openai_compatible")
+        _base_url = _entry.get("base_url") or None
+        _kwargs = {"api_key": _api_key(_entry)}
+        if _base_url:
+            _kwargs["base_url"] = _base_url
+        if _provider == "anthropic":
+            print(f"Using configured Anthropic-compatible endpoint for {model} ({_base_url}).")
+            return anthropic.Anthropic(**_kwargs), model
+        print(f"Using configured OpenAI-compatible endpoint for {model} ({_base_url}).")
+        return openai.OpenAI(**_kwargs), model
     if model.startswith("claude-"):
         print(f"Using Anthropic API with model {model}.")
         return anthropic.Anthropic(), model
@@ -181,7 +196,96 @@ def get_response_from_llm(
     if msg_history is None:
         msg_history = []
 
-    if "claude" in model:
+    _entry = _model_entry(model)  # dgm-config
+    if _entry is not None:
+        # Config-driven branch: any OpenAI-/Anthropic-compatible endpoint
+        # declared in models.json (create_client built the matching client).
+        _real_model = _entry.get("model") or model
+        _messages = list(msg_history) + [{"role": "user", "content": msg}]
+        _temperature = _entry.get("temperature", temperature)
+        if _entry.get("provider") == "anthropic":
+            _req = {"model": _real_model, "system": system_message, "messages": _messages}
+            if _temperature is not None:
+                _req["temperature"] = _temperature
+            _req["max_tokens"] = _entry.get("max_tokens") or MAX_OUTPUT_TOKENS
+            response = client.messages.create(**_req)
+            content = response.content[0].text
+        else:
+            _req = {
+                "model": _real_model,
+                "messages": [{"role": "system", "content": system_message}] + _messages,
+            }
+            if _temperature is not None:
+                _req["temperature"] = _temperature
+            _max_tokens = _entry.get("max_tokens", MAX_OUTPUT_TOKENS)
+            if _max_tokens is not None:
+                _req["max_tokens"] = _max_tokens
+            response = client.chat.completions.create(**_req)  # dgm-config: retry empty content (jitter)
+            _choice = response.choices[0]
+            _empty_retries = 0
+            _backoff = 1.0
+            while (
+                not _choice.message.content
+                and not getattr(_choice.message, "tool_calls", None)
+                and _empty_retries < 20
+            ):
+                # The gateway has minute-long windows where every reply comes back
+                # with content=None (tokens generated but dropped), so space the
+                # retries out instead of hammering it (~3 minutes total).
+                import time as _time
+                _empty_retries += 1
+                print(
+                    "[dgm-config] empty assistant content (finish_reason="
+                    f"{getattr(_choice, 'finish_reason', None)}), "
+                    f"retry {_empty_retries}/20 in {_backoff:.0f}s",
+                    flush=True,
+                )
+                _time.sleep(_backoff)
+                _backoff = min(_backoff * 1.6, 30.0)
+                if _empty_retries >= 3:
+                    _req["messages"][-1] = {
+                        "role": "user",
+                        "content": msg
+                        + f"\n\n[retry {_empty_retries}] Your previous reply was "
+                        "empty. Respond now with one <tool_use> block calling a tool.",
+                    }
+                response = client.chat.completions.create(**_req)
+                _choice = response.choices[0]
+            content = _choice.message.content
+            if not content:
+                _tcs = getattr(_choice.message, "tool_calls", None)
+                if _tcs:
+                    # Native tool call -> <tool_use> text block (DGM's format).
+                    import json as _json
+                    _blocks = []
+                    for _tc in _tcs:
+                        _tc_args = _tc.function.arguments or "{}"
+                        try:
+                            _tc_args = _json.loads(_tc_args)
+                        except Exception:
+                            pass
+                        _blocks.append(
+                            "<tool_use>\n"
+                            + repr({"tool_name": _tc.function.name, "tool_input": _tc_args})
+                            + "\n</tool_use>"
+                        )
+                    content = "\n".join(_blocks)
+                else:
+                    _msg_extra = getattr(_choice.message, "model_extra", None) or {}
+                    content = (
+                        getattr(_choice.message, "reasoning_content", None)
+                        or _msg_extra.get("reasoning_content")
+                        or _msg_extra.get("reasoning")
+                        or ""
+                    )
+                if not content:
+                    print(
+                        "[dgm-config] empty assistant content after retries: "
+                        + response.model_dump_json()[:600],
+                        flush=True,
+                    )
+        new_msg_history = _messages + [{"role": "assistant", "content": content}]
+    elif "claude" in model:
         new_msg_history = msg_history + [
             {
                 "role": "user",

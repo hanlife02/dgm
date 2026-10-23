@@ -4,6 +4,8 @@ import json
 import os
 import docker
 
+from dgm_config import diagnose_model as _diagnose_model_cfg  # dgm-config
+from dgm_config import int_setting as _int_setting  # dgm-config
 from llm import create_client, get_response_from_llm, extract_json_between_markers
 from prompts.self_improvement_prompt import get_diagnose_prompt_polyglot, get_diagnose_prompt_swe, get_problem_description_prompt
 from prompts.diagnose_improvement_prompt import get_diagnose_improvement_prompt
@@ -25,7 +27,7 @@ from utils.docker_utils import (
 )
 
 dataset = None
-diagnose_model = 'o1-2024-12-17'
+diagnose_model = _diagnose_model_cfg()
 
 def diagnose_problem(entry, commit, root_dir, out_dir, patch_files=[], max_attempts=3, polyglot=False):
     client = create_client(diagnose_model)
@@ -128,11 +130,11 @@ def run_harness_swe(entry, model_name_or_path, patch_files, num_evals, output_di
     dnames = harness(
         test_task_list=test_task_list,
         num_samples=-1,
-        max_workers=min(5, len(test_task_list)),
+        max_workers=max(1, min(_int_setting('concurrency', 'harness_workers', 1), len(test_task_list))),
         model_name_or_path=model_name_or_path,
         model_patch_paths=patch_files,
         num_evals=num_evals,
-        num_evals_parallel=5,
+        num_evals_parallel=_int_setting('concurrency', 'num_evals_parallel', 1),
         pred_dname=os.path.join(output_dir, "predictions"),
     )
     metadata['swe_dnames'] = [str(dn) for dn in dnames]
@@ -142,7 +144,8 @@ def run_harness_swe(entry, model_name_or_path, patch_files, num_evals, output_di
         run_ids=[f"{run_id}_{i}" for i in range(len(dnames))],
         dataset_name="princeton-nlp/SWE-bench_Verified",
         output_dir=output_dir,
-        dnames_workers=5,
+        dnames_workers=1,
+        num_eval_procs=_int_setting('concurrency', 'eval_procs', 1),
     )
     safe_log('Start get_performance')
     performances, overall_performance = get_all_performance(model_name_or_path, results_dir=output_dir)
@@ -157,11 +160,11 @@ def run_harness_swe(entry, model_name_or_path, patch_files, num_evals, output_di
         dnames = harness(
             test_task_list=test_task_list_more,
             num_samples=-1,
-            max_workers=min(5, len(test_task_list_more)),
+            max_workers=max(1, min(_int_setting('concurrency', 'harness_workers', 1), len(test_task_list_more))),
             model_name_or_path=model_name_or_path,
             model_patch_paths=patch_files,
             num_evals=num_evals,
-            num_evals_parallel=5,
+            num_evals_parallel=_int_setting('concurrency', 'num_evals_parallel', 1),
             pred_dname=os.path.join(output_dir, "predictions"),
         )
         safe_log('Start make_report more')
@@ -170,7 +173,8 @@ def run_harness_swe(entry, model_name_or_path, patch_files, num_evals, output_di
             run_ids=[f"{run_id}_{i}" for i in range(len(dnames))],
             dataset_name="princeton-nlp/SWE-bench_Verified",
             output_dir=output_dir,
-            dnames_workers=5,
+            dnames_workers=1,
+            num_eval_procs=_int_setting('concurrency', 'eval_procs', 1),
         )
         safe_log('Start get_performance')
         performances, overall_performance = get_all_performance(model_name_or_path, results_dir=output_dir)
@@ -184,11 +188,11 @@ def run_harness_polyglot(entry, model_name_or_path, patch_files, num_evals, outp
     dnames = polyglot_harness(
         test_task_list=test_task_list,
         num_samples=-1,
-        max_workers=min(10, len(test_task_list)),
+        max_workers=max(1, min(_int_setting('concurrency', 'harness_workers', 1), len(test_task_list))),
         model_name_or_path=model_name_or_path,
         model_patch_paths=patch_files,
         num_evals=num_evals,
-        num_evals_parallel=min(5, num_evals),
+        num_evals_parallel=max(1, min(_int_setting('concurrency', 'num_evals_parallel', 1), num_evals)),
         pred_dname=os.path.join(output_dir, "predictions"),
         output_dir=output_dir
     )
@@ -206,11 +210,11 @@ def run_harness_polyglot(entry, model_name_or_path, patch_files, num_evals, outp
         dnames = polyglot_harness(
             test_task_list=test_task_list_more,
             num_samples=-1,
-            max_workers=50,
+            max_workers=_int_setting('concurrency', 'harness_workers', 1),
             model_name_or_path=model_name_or_path,
             model_patch_paths=patch_files,
             num_evals=num_evals,
-            num_evals_parallel=min(5, num_evals),
+            num_evals_parallel=max(1, min(_int_setting('concurrency', 'num_evals_parallel', 1), num_evals)),
             pred_dname=os.path.join(output_dir, "predictions"),
             output_dir=output_dir
         )

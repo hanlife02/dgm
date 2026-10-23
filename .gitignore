@@ -25,3 +25,10 @@ polyglot/predictions/
 
 final_results/
 analysis/output/
+
+# dgm-config: local model credentials + local run artifacts
+models.json
+dgm_run*.log
+probe_*.py
+repro_turn2.py
+swe_bench/smoke_eval/

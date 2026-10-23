@@ -99,7 +99,7 @@ def make_report(
         dataset_name="princeton-nlp/SWE-bench_Verified",
         output_dir='./swe_bench',
         dnames_workers=None,
-        num_eval_procs=5,
+        num_eval_procs=2,
     ):
     """
     Generate reports for multiple directories in parallel.
@@ -135,7 +135,7 @@ def main():
     parser.add_argument('--run_ids', type=str, nargs='+', default=None, help="Run ID for this evaluation run.")
     parser.add_argument('--dataset_name', type=str, default="princeton-nlp/SWE-bench_Verified", help="Name of the dataset to evaluate on.")
     parser.add_argument('--dnames_workers', type=int, default=None, help="Number of parallel workers to use for processing dnames.")
-    parser.add_argument('--num_eval_procs', type=int, default=5, help="Number of parallel processes to use for evaluation.")
+    parser.add_argument('--num_eval_procs', type=int, default=2, help="Number of parallel processes to use for evaluation.")
     parser.add_argument('--output_dir', type=str, default='./swe_bench', help="Output directory for the reports.")
     args = parser.parse_args()
 

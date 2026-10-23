@@ -10,7 +10,9 @@ from llm import create_client, get_response_from_llm
 from prompts.tooluse_prompt import get_tooluse_prompt
 from tools import load_all_tools
 
-CLAUDE_MODEL = 'bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0'
+from dgm_config import coding_model as _coding_model  # dgm-config
+
+CLAUDE_MODEL = _coding_model()
 OPENAI_MODEL = 'o3-mini-2025-01-31'
 
 def process_tool_call(tools_dict, tool_name, tool_input):
@@ -307,31 +309,55 @@ def chat_with_agent_manualtools(msg, model, msg_history=None, logging=print):
         logging(f"Output: {response}")
 
         # Tool use
+        _NUDGE = (
+            "Your previous reply did not contain a tool call, so no work was done. "
+            "Continue the task now and include exactly one <tool_use> block with a "
+            "tool call. Only omit the tool call once every change has been saved "
+            "and verified."
+        )
+        _MAX_NUDGES = 3  # dgm-config: nudge when a reply has no tool call
         tool_use = check_for_tool_use(response, model=client_model)
-        while tool_use:
-            # Process tool call
-            tool_name = tool_use['tool_name']
-            tool_input = tool_use['tool_input']
-            tool_result = process_tool_call(tools_dict, tool_name, tool_input)
+        _nudges = 0
+        while True:
+            if tool_use:
+                # Process tool call
+                tool_name = tool_use['tool_name']
+                tool_input = tool_use['tool_input']
+                tool_result = process_tool_call(tools_dict, tool_name, tool_input)
 
-            # Get tool response
-            tool_msg = f'Tool Used: {tool_name}\nTool Input: {tool_input}\nTool Result: {tool_result}'
-            logging(tool_msg)
-            response, new_msg_history = get_response_from_llm(
-                msg=tool_msg,
-                client=client,
-                model=client_model,
-                system_message=system_message,
-                print_debug=False,
-                msg_history=new_msg_history,
-            )
-            logging(f"Output: {response}")
+                # Get tool response
+                tool_msg = f'Tool Used: {tool_name}\nTool Input: {tool_input}\nTool Result: {tool_result}'
+                logging(tool_msg)
+                response, new_msg_history = get_response_from_llm(
+                    msg=tool_msg,
+                    client=client,
+                    model=client_model,
+                    system_message=system_message,
+                    print_debug=False,
+                    msg_history=new_msg_history,
+                )
+                logging(f"Output: {response}")
+            elif _nudges < _MAX_NUDGES:
+                _nudges += 1
+                logging(f"No tool call in the reply; nudging ({_nudges}/{_MAX_NUDGES})")
+                response, new_msg_history = get_response_from_llm(
+                    msg=_NUDGE,
+                    client=client,
+                    model=client_model,
+                    system_message=system_message,
+                    print_debug=False,
+                    msg_history=new_msg_history,
+                )
+                logging(f"Output: {response}")
+            else:
+                break
 
             # Check for next tool use
             tool_use = check_for_tool_use(response, model=client_model)
 
-    except Exception:
-        pass
+    except Exception as _e:  # dgm-config: log instead of silently swallowing
+        import traceback as _traceback
+        logging(f"Agent loop error: {_e}\n{_traceback.format_exc()}")
 
     return new_msg_history
 

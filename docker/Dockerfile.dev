@@ -1,0 +1,36 @@
+# Dev/eval image for Darwin Godel Machine (DGM).
+# Contains: python deps from requirements.txt (+ analysis extras), SWE-bench
+# pinned at the commit the DGM harness expects, git/patch/graphviz.
+#
+# Build from the repo root:
+#   docker build -f docker/Dockerfile.dev -t dgm-dev .
+FROM python:3.11-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential git curl ca-certificates patch \
+        graphviz graphviz-dev libpq-dev procps less vim jq \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/dgm-build
+COPY requirements.txt requirements_dev.txt ./
+# analysis extras (pygraphviz) need the graphviz headers installed above
+RUN pip install -r requirements.txt -r requirements_dev.txt
+
+# SWE-bench, pinned to the commit DGM's swe_bench/ code imports against.
+# NOTE: the upstream README truncates this sha to 32 chars (git checkout fails).
+ARG SWE_BENCH_COMMIT=dc4c087c2b9e4cefebf2e3d201d27e362d899e0f
+RUN git clone https://github.com/SWE-bench/SWE-bench.git /opt/SWE-bench \
+    && cd /opt/SWE-bench \
+    && git checkout ${SWE_BENCH_COMMIT} \
+    && pip install -e .
+
+# DGM expects swebench at <repo>/swe_bench/SWE-bench; the run script links it.
+RUN echo "${SWE_BENCH_COMMIT}" > /opt/SWE-bench/.dgm_pinned_commit
+
+WORKDIR /dgm
+CMD ["bash"]

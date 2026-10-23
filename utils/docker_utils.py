@@ -1,5 +1,6 @@
 import io
 import logging
+import os  # dgm-config
 import threading
 from pathlib import Path
 import tarfile
@@ -115,7 +116,17 @@ def build_dgm_container(
         # Build the Docker image if force_rebuild is set or the image doesn't exist
         if force_rebuild or not any(image.tags for image in client.images.list() if image_name in image.tags):
             safe_log("Building the Docker image...")
-            image, logs = client.images.build(path=repo_path, tag=image_name, rm=True)
+            _proxy_buildargs = {  # dgm-config (docker-py drops proxy env vars)
+                k: os.environ[k]
+                for k in (
+                    "http_proxy", "https_proxy", "no_proxy", "all_proxy",
+                    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+                )
+                if os.environ.get(k)
+            }
+            image, logs = client.images.build(
+                path=repo_path, tag=image_name, rm=True, buildargs=_proxy_buildargs
+            )
             for log_entry in logs:
                 if 'stream' in log_entry:
                     safe_log(log_entry['stream'].strip())

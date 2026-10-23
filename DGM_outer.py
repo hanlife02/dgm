@@ -10,6 +10,7 @@ from prompts.self_improvement_prompt import find_selfimprove_eval_logs
 from self_improve_step import self_improve
 from utils.common_utils import load_json_file
 from utils.docker_utils import setup_logger
+from dgm_config import subset as _subset  # dgm-config
 from utils.evo_utils import load_dgm_metadata, is_compiled_self_improve
 
 def initialize_run(output_dir, prevrun_dir=None, polyglot=False):
@@ -255,8 +256,8 @@ def main():
 
     # SWE issues to consider
     if not args.polyglot:
-        swe_issues_sm = load_json_file("./swe_bench/subsets/small.json")
-        swe_issues_med = load_json_file("./swe_bench/subsets/medium.json")
+        swe_issues_sm = load_json_file(f"./swe_bench/subsets/{_subset('small', 'small.json')}")
+        swe_issues_med = load_json_file(f"./swe_bench/subsets/{_subset('medium', 'medium.json')}")
     else:
         swe_issues_sm = load_json_file("./polyglot/subsets/small.json")
         swe_issues_med = load_json_file("./polyglot/subsets/medium.json")
