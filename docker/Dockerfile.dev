@@ -11,6 +11,20 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Optional mirrors for hosts where deb.debian.org / pypi.org are unreachable,
+# e.g. --build-arg APT_MIRROR=mirrors.aliyun.com
+#      --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then \
+      for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do \
+        if [ -f "$f" ]; then \
+          sed -i "s|deb.debian.org|$APT_MIRROR|g; s|security.debian.org|$APT_MIRROR|g" "$f"; \
+        fi; \
+      done; \
+    fi
+ARG PIP_INDEX_URL=
+RUN if [ -n "$PIP_INDEX_URL" ]; then pip config set global.index-url "$PIP_INDEX_URL"; fi
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential git curl ca-certificates patch \
         graphviz graphviz-dev libpq-dev procps less vim jq \
@@ -24,7 +38,10 @@ RUN pip install -r requirements.txt -r requirements_dev.txt
 # SWE-bench, pinned to the commit DGM's swe_bench/ code imports against.
 # NOTE: the upstream README truncates this sha to 32 chars (git checkout fails).
 ARG SWE_BENCH_COMMIT=dc4c087c2b9e4cefebf2e3d201d27e362d899e0f
-RUN git clone https://github.com/SWE-bench/SWE-bench.git /opt/SWE-bench \
+# Override with a mirror when github.com is not directly reachable, e.g.
+#   --build-arg SWE_BENCH_REPO=https://ghfast.top/https://github.com/SWE-bench/SWE-bench.git
+ARG SWE_BENCH_REPO=https://github.com/SWE-bench/SWE-bench.git
+RUN git clone ${SWE_BENCH_REPO} /opt/SWE-bench \
     && cd /opt/SWE-bench \
     && git checkout ${SWE_BENCH_COMMIT} \
     && pip install -e .

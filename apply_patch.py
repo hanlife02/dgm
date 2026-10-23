@@ -668,4 +668,47 @@ patch(
     marker="_proxy_buildargs",
 )
 
+# ------------------- Dockerfile: reproducible base + optional apt/pip mirrors
+patch(
+    "Dockerfile",
+    """FROM python:3.10-slim
+
+# Install system-level dependencies, including git
+RUN apt-get update && apt-get install -y \\""",
+    """# dgm-config: pin the Debian release so the mirror rewrite below is stable
+FROM python:3.10-slim-bookworm
+
+# dgm-config: optional apt/pip mirrors for hosts where deb.debian.org / pypi.org
+# are unreachable. utils/docker_utils.py passes DGM_APT_MIRROR and
+# DGM_PIP_INDEX_URL as build args; both default to empty (upstream behaviour).
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then \\
+      for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do \\
+        if [ -f "$f" ]; then \\
+          sed -i "s|deb.debian.org|$APT_MIRROR|g; s|security.debian.org|$APT_MIRROR|g" "$f"; \\
+        fi; \\
+      done; \\
+    fi
+ARG PIP_INDEX_URL=
+RUN if [ -n "$PIP_INDEX_URL" ]; then pip config set global.index-url "$PIP_INDEX_URL"; fi
+
+# Install system-level dependencies, including git
+RUN apt-get update && apt-get install -y \\""",
+    marker="ARG APT_MIRROR=",
+)
+patch(
+    "utils/docker_utils.py",
+    """            image, logs = client.images.build(
+                path=repo_path, tag=image_name, rm=True, buildargs=_proxy_buildargs
+            )""",
+    """            if os.environ.get("DGM_APT_MIRROR"):  # dgm-config: mirror build args
+                _proxy_buildargs["APT_MIRROR"] = os.environ["DGM_APT_MIRROR"]
+            if os.environ.get("DGM_PIP_INDEX_URL"):
+                _proxy_buildargs["PIP_INDEX_URL"] = os.environ["DGM_PIP_INDEX_URL"]
+            image, logs = client.images.build(
+                path=repo_path, tag=image_name, rm=True, buildargs=_proxy_buildargs
+            )""",
+    marker="DGM_APT_MIRROR",
+)
+
 print("done")

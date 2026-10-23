@@ -124,6 +124,10 @@ def build_dgm_container(
                 )
                 if os.environ.get(k)
             }
+            if os.environ.get("DGM_APT_MIRROR"):  # dgm-config: mirror build args
+                _proxy_buildargs["APT_MIRROR"] = os.environ["DGM_APT_MIRROR"]
+            if os.environ.get("DGM_PIP_INDEX_URL"):
+                _proxy_buildargs["PIP_INDEX_URL"] = os.environ["DGM_PIP_INDEX_URL"]
             image, logs = client.images.build(
                 path=repo_path, tag=image_name, rm=True, buildargs=_proxy_buildargs
             )
