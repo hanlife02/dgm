@@ -1,5 +1,6 @@
 import ast
 import json
+import os  # dgm-config
 import re
 import anthropic
 import backoff
@@ -103,8 +104,15 @@ def check_for_tool_use(response, model=''):
                 tool_use_dict = ast.literal_eval(tool_use_str)
                 if isinstance(tool_use_dict, dict) and 'tool_name' in tool_use_dict and 'tool_input' in tool_use_dict:
                     return tool_use_dict
-            except Exception:
-                pass
+            except Exception as _e:  # dgm-config: diagnose unparsable tool blocks
+                try:
+                    print(
+                        "[dgm-config] tool_use literal_eval failed: "
+                        + repr(_e)[:200] + " raw=" + repr(tool_use_str)[:500],
+                        flush=True,
+                    )
+                except Exception:
+                    pass
 
     # No tool use found
     return None
@@ -311,11 +319,16 @@ def chat_with_agent_manualtools(msg, model, msg_history=None, logging=print):
         # Tool use
         _NUDGE = (
             "Your previous reply did not contain a tool call, so no work was done. "
-            "Continue the task now and include exactly one <tool_use> block with a "
-            "tool call. Only omit the tool call once every change has been saved "
-            "and verified."
+            "Reply with EXACTLY one tool call and nothing else, in this form:\n"
+            "<tool_use>\n{'tool_name': 'bash', 'tool_input': {'command': 'ls'}}\n"
+            "</tool_use>\n"
+            "No prose, no explanations, no markdown fences. Do not stop until the "
+            "fix has been applied and verified with a test run."
         )
-        _MAX_NUDGES = 3  # dgm-config: nudge when a reply has no tool call
+        # dgm-config: how many times a prose-only reply is nudged before the
+        # agent gives up (the gateway model often answers with plans instead of
+        # tool calls, so this is a tunable knob).
+        _MAX_NUDGES = int(os.environ.get("DGM_MAX_NUDGES", "3"))
         tool_use = check_for_tool_use(response, model=client_model)
         _nudges = 0
         while True:
@@ -340,6 +353,14 @@ def chat_with_agent_manualtools(msg, model, msg_history=None, logging=print):
             elif _nudges < _MAX_NUDGES:
                 _nudges += 1
                 logging(f"No tool call in the reply; nudging ({_nudges}/{_MAX_NUDGES})")
+                try:  # dgm-config: show the raw reply that failed to parse
+                    print(
+                        "[dgm-config] raw reply without tool call: "
+                        + repr(response)[:600],
+                        flush=True,
+                    )
+                except Exception:
+                    pass
                 response, new_msg_history = get_response_from_llm(
                     msg=_NUDGE,
                     client=client,

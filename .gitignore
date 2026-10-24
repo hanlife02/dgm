@@ -32,3 +32,10 @@ dgm_run*.log
 probe_*.py
 repro_turn2.py
 swe_bench/smoke_eval/
+
+# dgm-config: full-run artifacts
+dgm_*.log
+empty_req.json
+swe_bench/batches_out/
+swe_bench/one/
+swe_bench/validate/

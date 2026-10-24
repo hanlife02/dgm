@@ -184,6 +184,36 @@ def get_batch_responses_from_llm(
     (openai.RateLimitError, openai.APITimeoutError, anthropic.RateLimitError, anthropic.APIStatusError),
     max_time=120,
 )
+def _dgm_tool_specs():
+    """dgm-config: OpenAI-style tool schemas for the agent's own tools.
+
+    The gateway's tool-call parser discards parsed calls when the request
+    declares no tools, which surfaces as an empty reply with billed tokens.
+    Declaring them makes the server return `tool_calls` instead, which the
+    code below maps back to <tool_use> blocks.
+    """
+    try:
+        from tools.bash import tool_info as _bash_info
+        from tools.edit import tool_info as _editor_info
+
+        specs = [_bash_info(), _editor_info()]
+    except Exception:
+        return None
+    out = []
+    for spec in specs:
+        out.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": spec["name"],
+                    "description": spec["description"],
+                    "parameters": spec["input_schema"],
+                },
+            }
+        )
+    return out
+
+
 def get_response_from_llm(
         msg,
         client,
@@ -220,28 +250,54 @@ def get_response_from_llm(
             _max_tokens = _entry.get("max_tokens", MAX_OUTPUT_TOKENS)
             if _max_tokens is not None:
                 _req["max_tokens"] = _max_tokens
-            response = client.chat.completions.create(**_req)  # dgm-config: retry empty content (jitter)
+            # dgm-config: declare the agent's tools (see _dgm_tool_specs).
+            _tools = _dgm_tool_specs()
+            if _tools:
+                _req["tools"] = _tools
+            response = client.chat.completions.create(**_req)
             _choice = response.choices[0]
             _empty_retries = 0
             _backoff = 1.0
+            # dgm-config: the gateway can drop output for tens of minutes; the
+            # budget is configurable so long storms are survived instead of
+            # silently producing an empty patch.
+            _max_empty_retries = int(os.environ.get("DGM_EMPTY_RETRIES", "20"))
+            _empty_backoff_max = float(os.environ.get("DGM_EMPTY_BACKOFF_MAX", "30"))
             while (
                 not _choice.message.content
                 and not getattr(_choice.message, "tool_calls", None)
-                and _empty_retries < 20
+                and _empty_retries < _max_empty_retries
             ):
                 # The gateway has minute-long windows where every reply comes back
                 # with content=None (tokens generated but dropped), so space the
                 # retries out instead of hammering it (~3 minutes total).
                 import time as _time
                 _empty_retries += 1
+                if _empty_retries == 1:
+                    # dgm-config: dump the first empty reply for offline replay.
+                    try:
+                        import json as _json, os as _os
+                        _u = getattr(response, "usage", None)
+                        _dump = {
+                            "request": _req,
+                            "finish_reason": getattr(_choice, "finish_reason", None),
+                            "usage": _u.model_dump() if _u else None,
+                            "raw": response.model_dump_json(),
+                        }
+                        _path = _os.path.join("/dgm", "empty_req.json")
+                        with open(_path, "w") as _fh:
+                            _json.dump(_dump, _fh)
+                        print(f"[dgm-config] dumped empty request to {_path}", flush=True)
+                    except Exception as _exc:  # noqa: BLE001
+                        print(f"[dgm-config] dump failed: {_exc}", flush=True)
                 print(
                     "[dgm-config] empty assistant content (finish_reason="
                     f"{getattr(_choice, 'finish_reason', None)}), "
-                    f"retry {_empty_retries}/20 in {_backoff:.0f}s",
+                    f"retry {_empty_retries}/{_max_empty_retries} in {_backoff:.0f}s",
                     flush=True,
                 )
                 _time.sleep(_backoff)
-                _backoff = min(_backoff * 1.6, 30.0)
+                _backoff = min(_backoff * 1.6, _empty_backoff_max)
                 if _empty_retries >= 3:
                     _req["messages"][-1] = {
                         "role": "user",
