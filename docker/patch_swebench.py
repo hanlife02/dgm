@@ -36,6 +36,19 @@ MARKER = "_dgm_proxy_buildargs"
 DOCKERFILES = os.path.join(TARGET, "swebench/harness/dockerfiles.py")
 MIRROR_MARKER = "_dgm_git_mirror"
 
+# ------------------------------------------------- clone retry (429 handling)
+TEST_SPEC = os.path.join(TARGET, "swebench/harness/test_spec.py")
+CLONE_MARKER = "_dgm_clone_retry"
+OLD_CLONE = (
+    '        f"git clone -o origin https://github.com/{repo} {repo_directory}",'
+)
+NEW_CLONE = '''        # _dgm_clone_retry: GitHub mirrors answer HTTP 429 under parallel load,
+        # so retry the clone with backoff instead of failing the image build.
+        # cd / first: the Dockerfile sets WORKDIR /testbed, so removing /testbed
+        # mid-loop would leave the shell in a deleted directory.
+        f"cd / && for _dgm_i in 1 2 3 4 5 6 7 8; do git clone -o origin https://github.com/{repo} {repo_directory} && break; echo \\"clone attempt $_dgm_i failed\\"; rm -rf {repo_directory}; sleep $((_dgm_i * 15)); done",
+        f"test -d {repo_directory}",'''
+
 OLD = """        response = client.api.build(
             path=str(build_dir),
             tag=image_name,
@@ -124,11 +137,31 @@ def patch_git_mirror():
     print(f"patch {DOCKERFILES} (git mirror)")
 
 
+def patch_clone_retry():
+    """Retry `git clone` in the generated instance setup script.
+
+    GitHub mirrors (ghfast.top et al.) answer HTTP 429 when several image
+    builds clone in parallel, which fails the whole instance image with exit
+    code 128. A short retry loop with backoff rides that out.
+    """
+    src = _read(TEST_SPEC)
+    if CLONE_MARKER in src:
+        print(f"skip  {TEST_SPEC} (clone retry already patched)")
+        return
+    if OLD_CLONE not in src:
+        raise SystemExit(f"FAIL: clone command not found in {TEST_SPEC}")
+    src = src.replace(OLD_CLONE, NEW_CLONE, 1)
+    with open(TEST_SPEC, "w") as f:
+        f.write(src)
+    print(f"patch {TEST_SPEC} (clone retry)")
+
+
 def main():
     if PROXY_ONLY:
         patch_proxy()
     if MIRROR_ONLY:
         patch_git_mirror()
+        patch_clone_retry()
 
 
 if __name__ == "__main__":

@@ -711,4 +711,216 @@ patch(
     marker="DGM_APT_MIRROR",
 )
 
+# ------------------- swe_bench/harness.py: accept an explicit subset file
+patch(
+    "swe_bench/harness.py",
+    """    elif args.test_task_list == 'medium':
+        test_task_list = load_json_file("./swe_bench/subsets/medium.json")
+    else:""",
+    """    elif args.test_task_list == 'medium':
+        test_task_list = load_json_file("./swe_bench/subsets/medium.json")
+    elif args.test_task_list and os.path.isfile(args.test_task_list):  # dgm-config
+        test_task_list = load_json_file(args.test_task_list)
+    else:""",
+    marker="dgm-config\n        test_task_list = load_json_file(args.test_task_list)",
+)
+
+# ------------------- swe_bench/report.py: pass cache_level through
+patch(
+    "swe_bench/report.py",
+    '''    --run_id {run_id}
+"""''',
+    '''    --run_id {run_id}
+    --cache_level {os.environ.get('DGM_CACHE_LEVEL', 'instance')}
+"""''',
+    marker="DGM_CACHE_LEVEL",
+)
+
+# ------------------- swe_bench/harness.py: pip mirror inside eval containers
+patch(
+    "swe_bench/harness.py",
+    """        exec_result = container.exec_run(
+            "python -m pip install -r /dgm/requirements.txt",
+            workdir='/',
+            environment=_proxy_env,
+        )""",
+    """        _pip_index = os.environ.get("DGM_PIP_INDEX_URL", "")  # dgm-config: pip mirror
+        exec_result = container.exec_run(
+            "python -m pip install -r /dgm/requirements.txt"
+            + (f" -i {_pip_index}" if _pip_index else ""),
+            workdir='/',
+            environment=_proxy_env,
+        )""",
+    marker="_pip_index",
+)
+
+# ------------------- llm.py: make empty-content retry budget configurable
+patch(
+    "llm.py",
+    """            _empty_retries = 0
+            _backoff = 1.0
+            while (
+                not _choice.message.content
+                and not getattr(_choice.message, "tool_calls", None)
+                and _empty_retries < 20
+            ):""",
+    """            _empty_retries = 0
+            _backoff = 1.0
+            # dgm-config: the gateway can drop output for tens of minutes; the
+            # budget is configurable so long storms are survived instead of
+            # silently producing an empty patch.
+            _max_empty_retries = int(os.environ.get("DGM_EMPTY_RETRIES", "20"))
+            _empty_backoff_max = float(os.environ.get("DGM_EMPTY_BACKOFF_MAX", "30"))
+            while (
+                not _choice.message.content
+                and not getattr(_choice.message, "tool_calls", None)
+                and _empty_retries < _max_empty_retries
+            ):""",
+    marker="_max_empty_retries",
+)
+patch(
+    "llm.py",
+    """                _time.sleep(_backoff)
+                _backoff = min(_backoff * 1.6, 30.0)""",
+    """                _time.sleep(_backoff)
+                _backoff = min(_backoff * 1.6, _empty_backoff_max)""",
+    marker="min(_backoff * 1.6, _empty_backoff_max)",
+)
+patch(
+    "llm.py",
+    '''                    f"retry {_empty_retries}/20 in {_backoff:.0f}s",''',
+    '''                    f"retry {_empty_retries}/{_max_empty_retries} in {_backoff:.0f}s",''',
+    marker='_empty_retries}/{_max_empty_retries}',
+)
+
+# ------------------- llm_withtools.py: diagnose unparsed tool calls
+patch(
+    "llm_withtools.py",
+    """            except Exception:
+                pass
+
+    # No tool use found
+    return None""",
+    """            except Exception as _e:  # dgm-config: diagnose unparsable tool blocks
+                try:
+                    print(
+                        "[dgm-config] tool_use literal_eval failed: "
+                        + repr(_e)[:200] + " raw=" + repr(tool_use_str)[:500],
+                        flush=True,
+                    )
+                except Exception:
+                    pass
+
+    # No tool use found
+    return None""",
+    marker="tool_use literal_eval failed",
+)
+patch(
+    "llm_withtools.py",
+    """            elif _nudges < _MAX_NUDGES:
+                _nudges += 1
+                logging(f"No tool call in the reply; nudging ({_nudges}/{_MAX_NUDGES})")""",
+    """            elif _nudges < _MAX_NUDGES:
+                _nudges += 1
+                logging(f"No tool call in the reply; nudging ({_nudges}/{_MAX_NUDGES})")
+                try:  # dgm-config: show the raw reply that failed to parse
+                    print(
+                        "[dgm-config] raw reply without tool call: "
+                        + repr(response)[:600],
+                        flush=True,
+                    )
+                except Exception:
+                    pass""",
+    marker="raw reply without tool call",
+)
+
+# ------------------- harness.py: forward retry/nudge settings into the agent container
+patch(
+    "swe_bench/harness.py",
+    """            "OPENAI_API_KEY": os.getenv('OPENAI_API_KEY'),
+        }
+        safe_log("Running the agent")""",
+    """            "OPENAI_API_KEY": os.getenv('OPENAI_API_KEY'),
+        }
+        for _k in (  # dgm-config: forward gateway-robustness settings
+            "DGM_EMPTY_RETRIES",
+            "DGM_EMPTY_BACKOFF_MAX",
+            "DGM_MAX_NUDGES",
+            "DGM_CONFIG",
+            "HF_ENDPOINT",
+        ):
+            if os.environ.get(_k):
+                env_vars[_k] = os.environ[_k]
+        safe_log("Running the agent")""",
+    marker="forward gateway-robustness settings",
+)
+
+# ------------------- llm_withtools.py: configurable / stronger nudges
+patch(
+    "llm_withtools.py",
+    """        _NUDGE = (
+            "Your previous reply did not contain a tool call, so no work was done. "
+            "Continue the task now and include exactly one <tool_use> block with a "
+            "tool call. Only omit the tool call once every change has been saved "
+            "and verified."
+        )
+        _MAX_NUDGES = 3  # dgm-config: nudge when a reply has no tool call""",
+    """        _NUDGE = (
+            "Your previous reply did not contain a tool call, so no work was done. "
+            "Reply with EXACTLY one tool call and nothing else, in this form:\\n"
+            "<tool_use>\\n{'tool_name': 'bash', 'tool_input': {'command': 'ls'}}\\n"
+            "</tool_use>\\n"
+            "No prose, no explanations, no markdown fences. Do not stop until the "
+            "fix has been applied and verified with a test run."
+        )
+        # dgm-config: how many times a prose-only reply is nudged before the
+        # agent gives up (the gateway model often answers with plans instead of
+        # tool calls, so this is a tunable knob).
+        _MAX_NUDGES = int(os.environ.get("DGM_MAX_NUDGES", "3"))""",
+    marker="DGM_MAX_NUDGES",
+)
+patch(
+    "llm_withtools.py",
+    """import ast
+import json
+import re""",
+    """import ast
+import json
+import os  # dgm-config
+import re""",
+    marker="import os  # dgm-config",
+)
+
+# ------------------- swe_bench/harness.py: resume inside a batch
+patch(
+    "swe_bench/harness.py",
+    """        # Process entries in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_entry = {
+                executor.submit(process_entry, entry, out_dname, model_name_or_path_inst, model_patch_paths): entry
+                for entry in entries
+            }""",
+    """        # dgm-config: skip instances that already have a prediction file so an
+        # interrupted batch resumes instead of restarting from scratch.
+        _pending = [
+            entry for entry in entries
+            if not (out_dname / f"{entry['instance_id']}.json").exists()
+        ]
+        if len(_pending) != len(entries):
+            print(
+                f"[dgm-config] resuming {out_dname}: "
+                f"{len(entries) - len(_pending)}/{len(entries)} already predicted",
+                flush=True,
+            )
+        # Process entries in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_entry = {
+                executor.submit(process_entry, entry, out_dname, model_name_or_path_inst, model_patch_paths): entry
+                for entry in _pending
+            }""",
+    marker="already predicted",
+)
+
 print("done")

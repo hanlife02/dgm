@@ -65,6 +65,7 @@ ENV_ARGS=(
   -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REGION -e AWS_REGION_NAME
   -e HF_TOKEN -e DGM_CONFIG -e SWE_GITHUB_MIRROR
   -e DGM_APT_MIRROR -e DGM_PIP_INDEX_URL
+  -e DGM_EMPTY_RETRIES -e DGM_EMPTY_BACKOFF_MAX -e DGM_MAX_NUDGES
 )
 
 # Run as the host user so files written into the bind mount stay editable

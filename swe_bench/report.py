@@ -88,6 +88,7 @@ python {os.path.join(root_dir, './swe_bench/SWE-bench/swebench/harness/run_evalu
     --predictions_path {predictions_jsonl}
     --max_workers {num_eval_procs}
     --run_id {run_id}
+    --cache_level {os.environ.get('DGM_CACHE_LEVEL', 'instance')}
 """
     run_evals_cmd = " ".join([line.strip() for line in run_evals_cmd.split() if line.strip()])
     subprocess.run(run_evals_cmd.split(), check=True)

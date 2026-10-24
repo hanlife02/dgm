@@ -127,8 +127,10 @@ def process_entry(entry, out_dname, model_name_or_path, model_patch_paths):
             )
             if os.environ.get(k)
         }
+        _pip_index = os.environ.get("DGM_PIP_INDEX_URL", "")  # dgm-config: pip mirror
         exec_result = container.exec_run(
-            "python -m pip install -r /dgm/requirements.txt",
+            "python -m pip install -r /dgm/requirements.txt"
+            + (f" -i {_pip_index}" if _pip_index else ""),
             workdir='/',
             environment=_proxy_env,
         )
@@ -143,6 +145,15 @@ def process_entry(entry, out_dname, model_name_or_path, model_patch_paths):
             "AWS_SECRET_ACCESS_KEY": os.getenv('AWS_SECRET_ACCESS_KEY'),
             "OPENAI_API_KEY": os.getenv('OPENAI_API_KEY'),
         }
+        for _k in (  # dgm-config: forward gateway-robustness settings
+            "DGM_EMPTY_RETRIES",
+            "DGM_EMPTY_BACKOFF_MAX",
+            "DGM_MAX_NUDGES",
+            "DGM_CONFIG",
+            "HF_ENDPOINT",
+        ):
+            if os.environ.get(_k):
+                env_vars[_k] = os.environ[_k]
         safe_log("Running the agent")
         cmd = [
             "timeout", "32400",  # 9h timeout
@@ -257,12 +268,25 @@ def harness(
         
         print(f"Starting evaluation {eval_idx} for model {model_name_or_path}")
         
+        # dgm-config: skip instances that already have a prediction file so an
+        # interrupted batch resumes instead of restarting from scratch.
+        _pending = [
+            entry
+            for entry in entries
+            if not (out_dname / (entry["instance_id"] + ".json")).exists()
+        ]
+        if len(_pending) != len(entries):
+            print(
+                f"[dgm-config] resuming {out_dname}: "
+                f"{len(entries) - len(_pending)}/{len(entries)} already predicted",
+                flush=True,
+            )
         # Process entries in parallel
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
             future_to_entry = {
                 executor.submit(process_entry, entry, out_dname, model_name_or_path_inst, model_patch_paths): entry
-                for entry in entries
+                for entry in _pending
             }
             
             # Process completed tasks as they finish
@@ -299,6 +323,8 @@ def main():
         test_task_list = load_json_file("./swe_bench/subsets/small.json")
     elif args.test_task_list == 'medium':
         test_task_list = load_json_file("./swe_bench/subsets/medium.json")
+    elif args.test_task_list and os.path.isfile(args.test_task_list):  # dgm-config
+        test_task_list = load_json_file(args.test_task_list)
     else:
         # Default to None, means all of them
         test_task_list = None
